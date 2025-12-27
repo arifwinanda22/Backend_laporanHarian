@@ -45,16 +45,24 @@ class LaporanPekerjaanController extends Controller
                 'bagian' => 'required|string',
                 'petugas' => 'required|string',
                 'deskripsi' => 'nullable|string',
-                // Lampiran boleh kosong saat awal buat, karena baru "sedang dikerjakan"
+                // Lampiran boleh kosong saat awal buat
                 'lampiran.*' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:2048', 
             ]);
 
-            // Generate ID Pekerjaan
+            // --- BAGIAN GENERATE ID BARU ---
+            // 1. Ambil ID User yang sedang login
+            $userId = auth()->id();
+
+            // 2. Ambil nomor urut terakhir
             $lastLaporan = LaporanPekerjaan::latest('id')->first();
             $nextNumber = $lastLaporan ? $lastLaporan->id + 1 : 1;
-            $validated['id_pekerjaan'] = 'P' . str_pad($nextNumber, 6, '0', STR_PAD_LEFT);
 
-            // Handle lampiran jika user langsung upload (opsional)
+            // 3. Gabungkan: P + UserID + '-' + Nomor Urut (4 digit)
+            // Contoh Hasil: P3-0001 (Jika User ID 3 dan data pertama)
+            $validated['id_pekerjaan'] = 'P' . $userId . '-' . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
+            // -------------------------------
+
+            // Handle lampiran jika user langsung upload
             $lampiranPaths = [];
             if ($request->hasFile('lampiran')) {
                 foreach ($request->file('lampiran') as $file) {
@@ -65,7 +73,7 @@ class LaporanPekerjaanController extends Controller
             }
             $validated['lampiran'] = $lampiranPaths;
             
-            $validated['user_id'] = auth()->id();
+            $validated['user_id'] = $userId; // Gunakan variabel yang sudah diambil diatas
             // FLOW: Otomatis set status Dikerjakan saat input baru
             $validated['status'] = 'Dikerjakan'; 
 
@@ -81,7 +89,6 @@ class LaporanPekerjaanController extends Controller
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
-
     // USER SELESAI MENGERJAKAN (Upload Bukti -> Status jadi Menunggu Persetujuan)
     public function uploadBukti(Request $request, $id)
     {
@@ -139,6 +146,54 @@ class LaporanPekerjaanController extends Controller
             return response()->json([
                 'success' => true, 
                 'message' => 'Status pekerjaan diperbarui oleh Admin', 
+                'data' => $laporan
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    // UPDATE DATA PEKERJAAN (Edit)
+    public function update(Request $request, $id)
+    {
+        try {
+            // 1. Cari Data
+            $laporan = LaporanPekerjaan::findOrFail($id);
+
+            // 2. Cek Otorisasi (Hanya Pemilik atau Admin yang boleh edit)
+            if (auth()->user()->role !== 'admin' && $laporan->user_id !== auth()->id()) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+            }
+
+            // 3. Validasi
+            $validated = $request->validate([
+                'tanggal' => 'required|date',
+                'jenis_pekerjaan' => 'required|string',
+                'bagian' => 'required|string',
+                'petugas' => 'required|string',
+                'deskripsi' => 'nullable|string',
+                'lampiran.*' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:2048',
+            ]);
+
+            // 4. Handle Lampiran Baru (Jika ada upload baru)
+            $lampiranPaths = $laporan->lampiran ?? []; // Ambil lampiran lama
+            
+            if ($request->hasFile('lampiran')) {
+                foreach ($request->file('lampiran') as $file) {
+                    $filename = time() . '_' . uniqid() . '_' . $file->getClientOriginalName();
+                    $path = $file->storeAs('lampiran', $filename, 'public');
+                    $lampiranPaths[] = $path; // Tambahkan ke array lama
+                }
+                $validated['lampiran'] = $lampiranPaths;
+            }
+
+            // 5. Update Database
+            $laporan->update($validated);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Pekerjaan berhasil diperbarui',
                 'data' => $laporan
             ]);
 

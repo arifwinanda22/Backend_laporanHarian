@@ -16,6 +16,7 @@ class AuthController extends Controller
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users',
+            'phone'=> 'nullable|string|max:20',
             'password' => 'required|string|min:8',
         ]);
 
@@ -23,6 +24,7 @@ class AuthController extends Controller
         $user = User::create([
             'name' => $validated['name'],
             'email' => $validated['email'],
+            'phone' => $validated['phone'] ?? null,
             'password' => Hash::make($validated['password']),
             'role' => 'user', // FORCE ROLE USER
         ]);
@@ -76,6 +78,16 @@ class AuthController extends Controller
             ], 500);
         }
     }
+
+    public function index()
+{
+    $users = User::all(); // atau User::with('pekerjaan')->get();
+    
+    return response()->json([
+        'success' => true,
+        'data' => $users
+    ], 200);
+}
 
 
     public function logout(Request $request)
