@@ -59,39 +59,80 @@ class AsetController extends Controller
     }
 
     // PUT: Update Data
-    public function update(Request $request, $id)
-    {
-        $aset = Aset::find($id);
-        if (!$aset) return response()->json(['message' => 'Aset tidak ditemukan'], 404);
+    // public function update(Request $request, $id)
+    // {
+    //     $aset = Aset::find($id);
+    //     if (!$aset) return response()->json(['message' => 'Aset tidak ditemukan'], 404);
 
-        // Mapping input (Handle jika frontend kirim namaBarang ATAU assetName)
-        $nama = $request->assetName ?? $request->namaBarang ?? $aset->nama_aset;
-        $kode = $request->brandCode ?? $request->merkType ?? $aset->kode_aset;
-        $kategori = $request->category ?? $request->kategori ?? $aset->kategori;
-        $status = $request->status ?? $aset->status;
-        $log = $request->barcodeUpdateLog ?? $request->tanggal_log_barcode ?? $aset->tanggal_log_barcode;
+    //     // Mapping input (Handle jika frontend kirim namaBarang ATAU assetName)
+    //     $nama = $request->assetName ?? $request->namaBarang ?? $aset->nama_aset;
+    //     $kode = $request->brandCode ?? $request->merkType ?? $aset->kode_aset;
+    //     $kategori = $request->category ?? $request->kategori ?? $aset->kategori;
+    //     $status = $request->status ?? $aset->status;
+    //     $log = $request->barcodeUpdateLog ?? $request->tanggal_log_barcode ?? $aset->tanggal_log_barcode;
 
-        // Validasi unique, abaikan ID ini sendiri
-        $request->validate([
-            'brandCode' => 'sometimes|unique:asets,kode_aset,'.$id,
+    //     // Validasi unique, abaikan ID ini sendiri
+    //     $request->validate([
+    //         'brandCode' => 'sometimes|unique:asets,kode_aset,'.$id,
+    //     ]);
+
+    //     try {
+    //         $aset->update([
+    //             'nama_aset'           => $nama,
+    //             'kode_aset'           => $kode,
+    //             'kategori'            => $kategori,
+    //             'status'              => $status,
+    //             'jumlah'              => $request->jumlah ?? $aset->jumlah,
+    //             'tanggal_log_barcode' => $log,
+    //         ]);
+
+    //         return response()->json(['message' => 'Data Aset berhasil diperbarui!', 'data' => $aset]);
+
+    //     } catch (\Exception $e) {
+    //         return response()->json(['message' => 'Gagal update: ' . $e->getMessage()], 500);
+    //     }
+    // }
+
+    // File: AsetController.php
+
+public function update(Request $request, $id)
+{
+    $aset = Aset::find($id);
+    if (!$aset) return response()->json(['message' => 'Aset tidak ditemukan'], 404);
+
+    // 1. VALIDASI DATA UPDATE (Penting!)
+    // Kita tambahkan validasi agar input status dicek
+    $request->validate([
+        'brandCode' => 'sometimes|unique:asets,kode_aset,'.$id,
+        'status'    => 'sometimes|in:Aktif,Tidak Aktif', // Pastikan hanya menerima string ini
+    ]);
+
+    // 2. Mapping Input
+    // Hapus logika "?? $aset->..." yang membingungkan. 
+    // Biarkan fitur update() Laravel yang menangani data yang tidak dikirim.
+    
+    try {
+        $aset->update([
+            // Pakai $request->input('key', default) agar lebih rapi
+            'nama_aset'           => $request->input('assetName', $request->namaBarang) ?? $aset->nama_aset,
+            'kode_aset'           => $request->input('brandCode', $request->merkType) ?? $aset->kode_aset,
+            'kategori'            => $request->input('category', $request->kategori) ?? $aset->kategori,
+            
+            // PERBAIKAN DI SINI:
+            // Pastikan kita ambil 'status' dari request. 
+            // Jika request tidak punya 'status', baru pakai yang lama.
+            'status'              => $request->input('status', $aset->status),
+            
+            'jumlah'              => $request->jumlah ?? $aset->jumlah,
+            'tanggal_log_barcode' => $request->input('barcodeUpdateLog', $request->tanggal_log_barcode) ?? $aset->tanggal_log_barcode,
         ]);
 
-        try {
-            $aset->update([
-                'nama_aset'           => $nama,
-                'kode_aset'           => $kode,
-                'kategori'            => $kategori,
-                'status'              => $status,
-                'jumlah'              => $request->jumlah ?? $aset->jumlah,
-                'tanggal_log_barcode' => $log,
-            ]);
+        return response()->json(['message' => 'Data Aset berhasil diperbarui!', 'data' => $aset]);
 
-            return response()->json(['message' => 'Data Aset berhasil diperbarui!', 'data' => $aset]);
-
-        } catch (\Exception $e) {
-            return response()->json(['message' => 'Gagal update: ' . $e->getMessage()], 500);
-        }
+    } catch (\Exception $e) {
+        return response()->json(['message' => 'Gagal update: ' . $e->getMessage()], 500);
     }
+}
 
     // DELETE: Hapus Data
     public function destroy($id)

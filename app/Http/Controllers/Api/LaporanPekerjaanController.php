@@ -7,16 +7,17 @@ use App\Models\LaporanPekerjaan;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Auth;
+use Carbon\Carbon; // Pastikan import ini ada
 
 class LaporanPekerjaanController extends Controller
 {
-    // MENAMPILKAN DATA
+    // MENAMPILKAN SEMUA DATA (List)
     public function index()
     {
         try {
             $user = Auth::user();
             
-            // LOGIKA: Jika Admin, lihat SEMUA. Jika User, lihat PUNYA SENDIRI.
+            // 1. Ambil Data
             if ($user->role === 'admin') {
                 $laporan = LaporanPekerjaan::with('user')->latest()->get();
             } else {
@@ -26,6 +27,16 @@ class LaporanPekerjaanController extends Controller
                             ->get();
             }
             
+            // 2. [BARU] Format Tanggal untuk semua data di list
+            // Kita gunakan 'transform' untuk memodifikasi setiap item dalam koleksi
+            $laporan->transform(function($item) {
+                // Tambahkan field baru 'formatted_tanggal'
+                $item->formatted_tanggal = \Carbon\Carbon::parse($item->tanggal)
+                                            ->locale('id')
+                                            ->isoFormat('dddd, D MMMM Y');
+                return $item;
+            });
+            
             return response()->json([
                 'success' => true,
                 'data' => $laporan
@@ -34,6 +45,31 @@ class LaporanPekerjaanController extends Controller
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
+    // [BARU DITAMBAHKAN] MENAMPILKAN DETAIL SATU PEKERJAAN
+    // Ini memperbaiki error 500 saat klik tombol "mata" (detail)
+    public function show($id)
+{
+    try {
+        $laporan = LaporanPekerjaan::with('user')->findOrFail($id);
+
+        // UBAH BAGIAN INI:
+        // Gunakan isoFormat agar muncul nama hari (Senin, Selasa, dst)
+        // Pastikan setting locale Laravel sudah 'id' (Indonesia) atau set manual
+        $laporan->formatted_tanggal = \Carbon\Carbon::parse($laporan->tanggal)
+                                        ->locale('id')
+                                        ->isoFormat('dddd, D MMMM Y'); 
+        
+        // Contoh Output: "Senin, 12 Januari 2026"
+
+        return response()->json([
+            'success' => true,
+            'data' => $laporan
+        ]);
+
+    } catch (\Exception $e) {
+        return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+    }
+}
 
     // USER MEMBUAT PEKERJAAN (Otomatis Status: Dikerjakan)
     public function store(Request $request)
@@ -45,24 +81,16 @@ class LaporanPekerjaanController extends Controller
                 'bagian' => 'required|string',
                 'petugas' => 'required|string',
                 'deskripsi' => 'nullable|string',
-                // Lampiran boleh kosong saat awal buat
                 'lampiran.*' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:2048', 
             ]);
 
             // --- BAGIAN GENERATE ID BARU ---
-            // 1. Ambil ID User yang sedang login
             $userId = auth()->id();
-
-            // 2. Ambil nomor urut terakhir
             $lastLaporan = LaporanPekerjaan::latest('id')->first();
             $nextNumber = $lastLaporan ? $lastLaporan->id + 1 : 1;
-
-            // 3. Gabungkan: P + UserID + '-' + Nomor Urut (4 digit)
-            // Contoh Hasil: P3-0001 (Jika User ID 3 dan data pertama)
             $validated['id_pekerjaan'] = 'P' . $userId . '-' . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
             // -------------------------------
 
-            // Handle lampiran jika user langsung upload
             $lampiranPaths = [];
             if ($request->hasFile('lampiran')) {
                 foreach ($request->file('lampiran') as $file) {
@@ -72,9 +100,7 @@ class LaporanPekerjaanController extends Controller
                 }
             }
             $validated['lampiran'] = $lampiranPaths;
-            
-            $validated['user_id'] = $userId; // Gunakan variabel yang sudah diambil diatas
-            // FLOW: Otomatis set status Dikerjakan saat input baru
+            $validated['user_id'] = $userId;
             $validated['status'] = 'Dikerjakan'; 
 
             $laporan = LaporanPekerjaan::create($validated);
@@ -89,6 +115,7 @@ class LaporanPekerjaanController extends Controller
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
+
     // USER SELESAI MENGERJAKAN (Upload Bukti -> Status jadi Menunggu Persetujuan)
     public function uploadBukti(Request $request, $id)
     {
@@ -100,8 +127,7 @@ class LaporanPekerjaanController extends Controller
                 'lampiran.*' => 'file|mimes:jpg,jpeg,png,pdf|max:5120',
             ]);
 
-            // Proses Upload File Baru
-            $lampiranPaths = $laporan->lampiran ?? []; // Ambil lampiran lama jika ada
+            $lampiranPaths = $laporan->lampiran ?? []; 
             if ($request->hasFile('lampiran')) {
                 foreach ($request->file('lampiran') as $file) {
                     $filename = time() . '_' . uniqid() . '_' . $file->getClientOriginalName();
@@ -110,10 +136,9 @@ class LaporanPekerjaanController extends Controller
                 }
             }
 
-            // Update Data
             $laporan->update([
                 'lampiran' => $lampiranPaths,
-                'status' => 'Menunggu Persetujuan' // Flow berubah disini
+                'status' => 'Menunggu Persetujuan'
             ]);
 
             return response()->json(['success' => true, 'message' => 'Bukti terupload, menunggu approval admin', 'data' => $laporan]);
@@ -127,14 +152,12 @@ class LaporanPekerjaanController extends Controller
     public function approvePekerjaan(Request $request, $id)
     {
         try {
-            // Cek apakah yang akses adalah Admin
             if (Auth::user()->role !== 'admin') {
                 return response()->json(['message' => 'Unauthorized'], 403);
             }
 
             $laporan = LaporanPekerjaan::findOrFail($id);
             
-            // Validasi input status dari admin (Selesai atau Ditolak)
             $request->validate([
                 'status' => 'required|in:Selesai,Ditolak'
             ]);
@@ -158,15 +181,12 @@ class LaporanPekerjaanController extends Controller
     public function update(Request $request, $id)
     {
         try {
-            // 1. Cari Data
             $laporan = LaporanPekerjaan::findOrFail($id);
 
-            // 2. Cek Otorisasi (Hanya Pemilik atau Admin yang boleh edit)
             if (auth()->user()->role !== 'admin' && $laporan->user_id !== auth()->id()) {
                 return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
             }
 
-            // 3. Validasi
             $validated = $request->validate([
                 'tanggal' => 'required|date',
                 'jenis_pekerjaan' => 'required|string',
@@ -176,19 +196,17 @@ class LaporanPekerjaanController extends Controller
                 'lampiran.*' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:2048',
             ]);
 
-            // 4. Handle Lampiran Baru (Jika ada upload baru)
-            $lampiranPaths = $laporan->lampiran ?? []; // Ambil lampiran lama
+            $lampiranPaths = $laporan->lampiran ?? [];
             
             if ($request->hasFile('lampiran')) {
                 foreach ($request->file('lampiran') as $file) {
                     $filename = time() . '_' . uniqid() . '_' . $file->getClientOriginalName();
                     $path = $file->storeAs('lampiran', $filename, 'public');
-                    $lampiranPaths[] = $path; // Tambahkan ke array lama
+                    $lampiranPaths[] = $path;
                 }
                 $validated['lampiran'] = $lampiranPaths;
             }
 
-            // 5. Update Database
             $laporan->update($validated);
 
             return response()->json([
@@ -202,18 +220,15 @@ class LaporanPekerjaanController extends Controller
         }
     }
 
-    // MENGHAPUS DATA (Admin Hapus Semua, User Hapus Punya Sendiri)
+    // MENGHAPUS DATA
     public function destroy($id)
     {
         try {
             $user = Auth::user();
             $laporan = LaporanPekerjaan::findOrFail($id);
 
-            // LOGIKA IZIN HAPUS
-            // Boleh hapus jika: Role Admin ATAU (Role User DAN itu miliknya sendiri)
             if ($user->role === 'admin' || $laporan->user_id === $user->id) {
                 
-                // Hapus file fisik
                 if ($laporan->lampiran && is_array($laporan->lampiran)) {
                     foreach ($laporan->lampiran as $file) {
                         Storage::disk('public')->delete($file);
